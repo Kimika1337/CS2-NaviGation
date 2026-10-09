@@ -24,26 +24,36 @@ class NavBuffer:
         return value
 
     def read_int64(self):
+        if self.pos + 8 > len(self.data):
+            raise Exception(f"Buffer overflow at pos {self.pos}, size {len(self.data)}")
         value = struct.unpack('<q', self.data[self.pos:self.pos + 8])[0]
         self.pos += 8
         return value
 
     def read_uint8(self):
+        if self.pos + 1 > len(self.data):
+            raise Exception(f"Buffer overflow at pos {self.pos}, size {len(self.data)}")
         value = struct.unpack('<B', self.data[self.pos:self.pos + 1])[0]
         self.pos += 1
         return value
 
     def read_uint16(self):
+        if self.pos + 2 > len(self.data):
+            raise Exception(f"Buffer overflow at pos {self.pos}, size {len(self.data)}")
         value = struct.unpack('<H', self.data[self.pos:self.pos + 2])[0]
         self.pos += 2
         return value
 
     def read_float(self):
+        if self.pos + 4 > len(self.data):
+            raise Exception(f"Buffer overflow at pos {self.pos}, size {len(self.data)}")
         value = struct.unpack('<f', self.data[self.pos:self.pos + 4])[0]
         self.pos += 4
         return value
 
     def read_vec3(self):
+        if self.pos + 12 > len(self.data):
+            raise Exception(f"Buffer overflow at pos {self.pos}, size {len(self.data)}")
         value = struct.unpack('<3f', self.data[self.pos:self.pos + 12])
         self.pos += 12
         return value
@@ -59,6 +69,8 @@ class NavBuffer:
 
 class NavArea:
     def __init__(self, buffer, file_version, polygons):
+        self.start_pos = buffer.pos
+
         self.id = buffer.read_uint32()
         self.dynamic_attribute_flags = buffer.read_int64()
         self.hull_index = buffer.read_uint8()
@@ -107,6 +119,13 @@ class NavArea:
         cy = sum(c[1] for c in self.corners) / len(self.corners)
         cz = sum(c[2] for c in self.corners) / len(self.corners)
         return (cx, cy, cz)
+
+    def width(self):
+        if not self.corners:
+            return 0.0
+        xs = [c[0] for c in self.corners]
+        ys = [c[1] for c in self.corners]
+        return max(max(xs) - min(xs), max(ys) - min(ys))
 
 
 class NavFile:
@@ -194,7 +213,12 @@ class NavFile:
 
         self.areas = []
         for i in range(area_count):
-            area = NavArea(buffer, self.version, self.polygons)
+            try:
+                area = NavArea(buffer, self.version, self.polygons)
+            except Exception as e:
+                raise Exception(
+                    f"Failed at area {i}/{area_count} (pos {buffer.pos}): {e}"
+                )
             self.areas.append(area)
             if (i + 1) % 500 == 0:
                 print(f"  Loaded {i + 1}/{area_count} areas")
@@ -374,6 +398,8 @@ class NavFile:
     def build_connections(self):
         self.connections = {}
 
+        id_to_area = {a.id: a for a in self.areas}
+
         for area in self.areas:
             neighbors = {}
 
@@ -382,12 +408,7 @@ class NavFile:
                     if area_id == area.id:
                         continue
 
-                    neighbor = None
-                    for a in self.areas:
-                        if a.id == area_id:
-                            neighbor = a
-                            break
-
+                    neighbor = id_to_area.get(area_id)
                     if neighbor is None:
                         continue
 
@@ -429,7 +450,7 @@ def generate_header(nav_file, output_path, map_name):
         f.write("// Version: {}\n".format(nav_file.version))
         f.write("// Total nodes: {}\n\n".format(len(valid_areas)))
         f.write("#pragma once\n\n")
-        f.write(f"static const EmbeddedNavNode {array_name}[] = \n{{\n")
+        f.write(f"static const CEmbeddedNavNode {array_name}[] = \n{{\n")
 
         for area in valid_areas:
             neighbors = nav_file.connections[area.id]
@@ -447,12 +468,15 @@ def generate_header(nav_file, output_path, map_name):
                     neighbor_distances.append(dist)
 
             center = area.center()
+            width = area.width()
 
             f.write("    {\n")
             f.write("        {},\n".format(id_to_index[area.id]))
+            f.write("        {:.6f}f,\n".format(width))
             f.write("        {{{:.6f}f, {:.6f}f, {:.6f}f}},\n".format(
                 center[0], center[1], center[2]
             ))
+            f.write("        {},\n".format(len(neighbor_indices)))
             f.write("        {")
             for i in range(16):
                 if i < len(neighbor_indices):
@@ -471,7 +495,6 @@ def generate_header(nav_file, output_path, map_name):
                 if i < 15:
                     f.write(", ")
             f.write("},\n")
-            f.write("        {}\n".format(len(neighbor_indices)))
             f.write("    },\n")
 
         f.write("};\n\n")
