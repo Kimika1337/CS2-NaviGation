@@ -205,21 +205,30 @@ class NavFile:
 
     def find_areas_start(self, buffer):
         data = buffer.data
-        print("Searching for areas (global scan + read test)...")
+        print("Searching for areas...")
 
-        for pos in range(145, len(data) - 21, 4):
-            count = struct.unpack('<I', data[pos:pos + 4])[0]
+        polys_end = buffer.pos
+        n = len(data)
+        needle = b'\x01\x00\x00\x00'
+
+        candidates = []
+
+        search_pos = max(polys_end - 4, 0)
+        while True:
+            idx = data.find(needle, search_pos)
+            if idx < 0:
+                break
+            search_pos = idx + 1
+
+            pos = idx - 4
+            if pos < 0 or pos + 21 > n:
+                continue
+
+            count = struct.unpack_from('<I', data, pos)[0]
             if count < 500 or count > 15000:
                 continue
 
-            aid = struct.unpack('<I', data[pos + 4:pos + 8])[0]
-            if aid != 1:
-                continue
-
-            if count * 40 > len(data) - pos:
-                continue
-
-            flags_val = struct.unpack('<q', data[pos + 8:pos + 16])[0]
+            flags_val = struct.unpack_from('<q', data, pos + 8)[0]
             if abs(flags_val) > 0x10000000000:
                 continue
 
@@ -227,30 +236,53 @@ class NavFile:
             if hull_idx > 10:
                 continue
 
-            poly_idx = struct.unpack('<I', data[pos + 17:pos + 21])[0]
+            poly_idx = struct.unpack_from('<I', data, pos + 17)[0]
             if poly_idx >= len(self.polygons):
                 continue
 
-            test_buf = NavBuffer(data)
-            test_buf.pos = pos
-            try:
-                test_buf.read_uint32()
-                for _ in range(min(3, count)):
-                    area = NavArea(test_buf, self.version, self.polygons)
-                    if not area.corners:
-                        raise Exception("empty corners")
-            except Exception:
+            candidates.append((pos, count, hull_idx, poly_idx))
+
+        if not candidates:
+            raise Exception("Could not find areas data")
+
+        candidates.sort(key=lambda c: c[1], reverse=True)
+
+        best = None
+        best_read = -1
+
+        for pos, count, hull_idx, poly_idx in candidates:
+            if count <= best_read:
                 continue
 
-            buffer.pos = pos
-            print(f"Found areas at pos {pos}")
-            print(f"  area_count: {count}")
-            print(f"  first area_id: {aid}")
-            print(f"  hull_index: {hull_idx}")
-            print(f"  polygon_index: {poly_idx}")
-            return buffer
+            test_buf = NavBuffer(data)
+            test_buf.pos = pos + 4
+            read = 0
+            try:
+                for _ in range(count):
+                    area = NavArea(test_buf, self.version, self.polygons)
+                    if not area.corners:
+                        break
+                    read += 1
+            except Exception:
+                pass
 
-        raise Exception("Could not find areas data")
+            if read > best_read:
+                best_read = read
+                best = (pos, count, hull_idx, poly_idx)
+                if best_read == count:
+                    break
+
+        if best is None or best_read < 3:
+            raise Exception(f"Could not find valid areas data (best read {best_read})")
+
+        pos, count, hull_idx, poly_idx = best
+        buffer.pos = pos
+        print(f"Found areas at pos {pos} (read {best_read}/{count} areas)")
+        print(f"  area_count: {count}")
+        print(f"  first area_id: 1")
+        print(f"  hull_index: {hull_idx}")
+        print(f"  polygon_index: {poly_idx}")
+        return buffer
 
     def build_connections(self):
         self.connections = {}
