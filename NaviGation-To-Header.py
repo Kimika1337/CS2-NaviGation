@@ -147,64 +147,17 @@ class NavFile:
         self.is_analyzed = (flags & 0x00000001) != 0
 
         if self.version >= 36:
-            buffer = self.skip_kv3_block(buffer)
-            buffer = self.find_polygons_start(buffer)
+            buffer.pos = 145
+        elif self.version >= 35:
+            buffer.pos = 16
+        else:
+            raise Exception(f"Unsupported nav version: {self.version}")
 
         self.polygons = self.read_polygons(buffer)
         print(f"Polygons: {len(self.polygons)}")
         print(f"Position after polygons: {buffer.pos}")
 
-        scan_start = buffer.pos
-        scan_end = min(buffer.pos + 200000, len(buffer.data) - 100)
-
-        print(f"Scanning for areas from {scan_start} to {scan_end}")
-
-        found_areas = False
-        for pos in range(scan_start, scan_end, 4):
-            test_count = struct.unpack('<I', buffer.data[pos:pos + 4])[0]
-
-            if test_count < 500 or test_count > 15000:
-                continue
-
-            if test_count * 40 > len(buffer.data) - pos:
-                continue
-
-            if pos + 21 > len(buffer.data):
-                continue
-
-            area_id = struct.unpack('<I', buffer.data[pos + 4:pos + 8])[0]
-            if area_id > 100000:
-                continue
-
-            flags_val = struct.unpack('<q', buffer.data[pos + 8:pos + 16])[0]
-            if abs(flags_val) > 0x10000000000:
-                continue
-
-            hull_idx = buffer.data[pos + 16]
-            if hull_idx > 10:
-                continue
-
-            poly_idx = struct.unpack('<I', buffer.data[pos + 17:pos + 21])[0]
-            if poly_idx >= len(self.polygons):
-                continue
-
-            buffer.pos = pos
-            found_areas = True
-            print(f"Found areas at pos {pos}")
-            print(f"  area_count: {test_count}")
-            print(f"  first area_id: {area_id}")
-            print(f"  hull_index: {hull_idx}")
-            print(f"  polygon_index: {poly_idx}")
-            break
-
-        if not found_areas:
-            print("Could not find areas, dumping nearby data:")
-            for i in range(scan_start, min(scan_start + 64, len(buffer.data)), 4):
-                val = struct.unpack('<I', buffer.data[i:i + 4])[0]
-                fval = struct.unpack('<f', buffer.data[i:i + 4])[0]
-                print(f"  pos {i}: int={val} float={fval}")
-            raise Exception("Could not find areas data")
-
+        buffer = self.find_areas_start(buffer)
         area_count = buffer.read_uint32()
         print(f"Area count: {area_count}")
 
@@ -250,147 +203,54 @@ class NavFile:
 
         return polygons
 
-    def read_null_terminated_string(self, buffer):
-        result = []
-        while buffer.bytes_remaining() > 0:
-            c = buffer.read_uint8()
-            if c == 0:
-                break
-            result.append(chr(c))
-        return ''.join(result)
+    def find_areas_start(self, buffer):
+        data = buffer.data
+        print("Searching for areas (global scan + read test)...")
 
-    def skip_kv3_block(self, buffer):
-        if buffer.bytes_remaining() < 4:
-            return buffer
-
-        magic = struct.unpack('<I', buffer.data[buffer.pos:buffer.pos + 4])[0]
-
-        if magic == 0x03564B56:
-            buffer.skip(buffer.bytes_remaining())
-            return buffer
-
-        if (magic & 0xFFFFFF00) != 0x4B563300:
-            return buffer
-
-        buffer.read_uint32()
-        buffer.skip(16)
-
-        compression_method = buffer.read_uint32()
-
-        buffer.read_uint16()
-        buffer.read_uint16()
-
-        buffer.read_int32()
-        buffer.read_int32()
-        buffer.read_int32()
-        buffer.read_int32()
-
-        buffer.read_uint16()
-        buffer.read_uint16()
-
-        size_uncompressed_total = buffer.read_int32()
-        size_compressed_total = buffer.read_int32()
-        count_blocks = buffer.read_int32()
-        size_binary_blobs_bytes = buffer.read_int32()
-
-        buffer.read_int32()
-        buffer.read_int32()
-
-        size_uncompressed_buffer1 = buffer.read_int32()
-        size_compressed_buffer1 = buffer.read_int32()
-        size_uncompressed_buffer2 = buffer.read_int32()
-        size_compressed_buffer2 = buffer.read_int32()
-
-        buffer.read_int32()
-        buffer.read_int32()
-        buffer.read_int32()
-        buffer.read_int32()
-
-        buffer.skip(4)
-
-        buffer.read_int32()
-        buffer.read_int32()
-
-        buffer.skip(4)
-
-        if compression_method == 0:
-            if size_uncompressed_buffer1 > 0:
-                buffer.skip(size_uncompressed_buffer1)
-            if size_uncompressed_buffer2 > 0:
-                buffer.skip(size_uncompressed_buffer2)
-        else:
-            if size_compressed_buffer1 > 0:
-                buffer.skip(size_compressed_buffer1)
-            if size_compressed_buffer2 > 0:
-                buffer.skip(size_compressed_buffer2)
-
-        if count_blocks > 0:
-            if compression_method == 0:
-                buffer.skip(size_binary_blobs_bytes)
-            buffer.skip(4)
-        else:
-            if buffer.bytes_remaining() >= 4:
-                trailer = struct.unpack('<I', buffer.data[buffer.pos:buffer.pos + 4])[0]
-                if trailer == 0xFFEEDD00:
-                    buffer.skip(4)
-
-        return buffer
-
-    def find_polygons_start(self, buffer):
-        print(f"Scanning for polygons data from pos {buffer.pos}...")
-
-        scan_end = min(buffer.pos + 200000, len(buffer.data) - 100)
-
-        for pos in range(buffer.pos, scan_end, 4):
-            corner_count = struct.unpack('<I', buffer.data[pos:pos + 4])[0]
-
-            if corner_count < 1000 or corner_count > 20000:
+        for pos in range(145, len(data) - 21, 4):
+            count = struct.unpack('<I', data[pos:pos + 4])[0]
+            if count < 500 or count > 15000:
                 continue
 
-            corners_size = corner_count * 12
-            if pos + 4 + corners_size + 4 > len(buffer.data):
+            aid = struct.unpack('<I', data[pos + 4:pos + 8])[0]
+            if aid != 1:
                 continue
 
-            polygon_pos = pos + 4 + corners_size
-            polygon_count = struct.unpack('<I', buffer.data[polygon_pos:polygon_pos + 4])[0]
-
-            if polygon_count < 500 or polygon_count > 20000:
-                continue
-            if polygon_count < corner_count // 3 or polygon_count > corner_count * 2:
+            if count * 40 > len(data) - pos:
                 continue
 
-            first_poly_pos = polygon_pos + 4
-            if first_poly_pos >= len(buffer.data):
+            flags_val = struct.unpack('<q', data[pos + 8:pos + 16])[0]
+            if abs(flags_val) > 0x10000000000:
                 continue
 
-            corner_count_in_poly = buffer.data[first_poly_pos]
-
-            if corner_count_in_poly < 3 or corner_count_in_poly > 8:
+            hull_idx = data[pos + 16]
+            if hull_idx > 10:
                 continue
 
-            valid = True
-            for i in range(corner_count_in_poly):
-                idx_pos = first_poly_pos + 1 + i * 4
-                if idx_pos + 4 > len(buffer.data):
-                    valid = False
-                    break
-                corner_index = struct.unpack('<I', buffer.data[idx_pos:idx_pos + 4])[0]
-                if corner_index >= corner_count:
-                    valid = False
-                    break
+            poly_idx = struct.unpack('<I', data[pos + 17:pos + 21])[0]
+            if poly_idx >= len(self.polygons):
+                continue
 
-            if not valid:
+            test_buf = NavBuffer(data)
+            test_buf.pos = pos
+            try:
+                test_buf.read_uint32()
+                for _ in range(min(3, count)):
+                    area = NavArea(test_buf, self.version, self.polygons)
+                    if not area.corners:
+                        raise Exception("empty corners")
+            except Exception:
                 continue
 
             buffer.pos = pos
-            print(f"Found polygons at pos {pos}")
-            print(f"  corner_count: {corner_count}")
-            print(f"  polygon_count: {polygon_count}")
-            print(f"  First polygon corners: {corner_count_in_poly}")
+            print(f"Found areas at pos {pos}")
+            print(f"  area_count: {count}")
+            print(f"  first area_id: {aid}")
+            print(f"  hull_index: {hull_idx}")
+            print(f"  polygon_index: {poly_idx}")
             return buffer
 
-        print("Could not find polygons data")
-        return buffer
+        raise Exception("Could not find areas data")
 
     def build_connections(self):
         self.connections = {}
@@ -427,11 +287,9 @@ class NavFile:
 
             self.connections[area.id] = list(neighbors.items())
 
-
 def sanitize_map_name(nav_filename):
     base = os.path.splitext(os.path.basename(nav_filename))[0]
     return base.upper().replace('-', '_').replace(' ', '_')
-
 
 def generate_header(nav_file, output_path, map_name):
     array_name = f"{map_name}_NAV_DATA"
@@ -447,6 +305,7 @@ def generate_header(nav_file, output_path, map_name):
         f.write("// Version: {}\n".format(nav_file.version))
         f.write("// Total nodes: {}\n\n".format(len(valid_areas)))
         f.write("#pragma once\n\n")
+        f.write('#include "CEmbeddedNavNode.h"\n\n')
         f.write(f"static const CEmbeddedNavNode {array_name}[] = \n{{\n")
 
         for area in valid_areas:
@@ -499,6 +358,25 @@ def generate_header(nav_file, output_path, map_name):
 
     print(f"Header written to: {output_path}")
 
+def write_embedded_nav_node_header(output_path):
+    content = """#pragma once
+
+#include "Source/Sdk/Datatypes/Vector.h"
+
+class CEmbeddedNavNode
+{
+public:
+    int Index;
+    float Width;
+    Vector3 Position;
+    int NeighborCount;
+    int NeighborIndices[16];
+    float NeighborDistances[16];
+};
+"""
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print(f"Written: {output_path}")
 
 def print_help():
     print("Usage:")
@@ -519,7 +397,6 @@ def print_help():
     print("  -h, --help             Show this help message")
     print("")
 
-
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_header_dir = os.path.join(script_dir, "output_header")
@@ -538,14 +415,18 @@ def main():
         if arg2:
             output_path = arg2
             if os.path.isdir(output_path):
-                output_path = os.path.join(output_path, f"{map_name.lower()}.h")
+                header_dir = output_path
+                output_path = os.path.join(header_dir, f"{map_name.lower()}.h")
             else:
-                parent = os.path.dirname(os.path.abspath(output_path))
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
+                header_dir = os.path.dirname(os.path.abspath(output_path))
+                if header_dir:
+                    os.makedirs(header_dir, exist_ok=True)
         else:
-            os.makedirs(default_header_dir, exist_ok=True)
-            output_path = os.path.join(default_header_dir, f"{map_name.lower()}.h")
+            header_dir = default_header_dir
+            os.makedirs(header_dir, exist_ok=True)
+            output_path = os.path.join(header_dir, f"{map_name.lower()}.h")
+
+        write_embedded_nav_node_header(os.path.join(header_dir, "CEmbeddedNavNode.h"))
 
         print(f"Single-file mode: {nav_path}")
         try:
@@ -569,6 +450,8 @@ def main():
         sys.exit(1)
 
     os.makedirs(header_dir, exist_ok=True)
+
+    write_embedded_nav_node_header(os.path.join(header_dir, "CEmbeddedNavNode.h"))
 
     nav_files = sorted(
         f for f in os.listdir(nav_dir)
