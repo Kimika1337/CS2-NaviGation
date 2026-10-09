@@ -393,8 +393,6 @@ def generate_header(nav_file, output_path, map_name):
 def write_embedded_nav_node_header(output_path):
     content = """#pragma once
 
-#include "Source/Sdk/Datatypes/Vector.h"
-
 class CEmbeddedNavNode
 {
 public:
