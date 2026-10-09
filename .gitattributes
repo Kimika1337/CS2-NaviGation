@@ -1,0 +1,4 @@
+*.py linguist-language=Python
+*.h linguist-language=C++
+output_header/* linguist-generated=true
+output/* linguist-generated=true
