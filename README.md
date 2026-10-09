@@ -90,8 +90,6 @@ The generated headers reference a `CEmbeddedNavNode` type. A minimal definition 
 ```cpp
 #pragma once
 
-#include "Source/Sdk/Datatypes/Vector.h"
-
 class CEmbeddedNavNode
 {
 public:
@@ -104,7 +102,7 @@ public:
 };
 ```
 
-**Important:** You must provide your own `Vector3` implementation. This project does not include one. Adjust the `#include` path and the type name to match your own project.
+**Important:** You need to include your own `Vector3` library. This project does not provide one. Adjust the include path and the type name to match your own project.
 
 The script will automatically write a `CEmbeddedNavNode.h` into the output directory. If you already have your own version, either remove the write step or point it at a template file.
 
