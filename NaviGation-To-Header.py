@@ -3,7 +3,6 @@ import sys
 import math
 import struct
 
-
 class NavBuffer:
     def __init__(self, data):
         self.data = data
@@ -66,7 +65,6 @@ class NavBuffer:
     def bytes_remaining(self):
         return len(self.data) - self.pos
 
-
 class NavArea:
     def __init__(self, buffer, file_version, polygons):
         self.start_pos = buffer.pos
@@ -126,7 +124,6 @@ class NavArea:
         xs = [c[0] for c in self.corners]
         ys = [c[1] for c in self.corners]
         return max(max(xs) - min(xs), max(ys) - min(ys))
-
 
 class NavFile:
     def __init__(self, filepath):
@@ -610,7 +607,6 @@ def main():
     print("=" * 60)
     print(f"Done. Success: {ok}, Failed: {fail}")
     print(f"Headers written to: {header_dir}")
-
 
 if __name__ == "__main__":
     main()
